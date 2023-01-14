@@ -7,10 +7,12 @@ import struct
 from decimal import Decimal
 from .memo import BinaryMemo
 
+import re
+
 PY2 = sys.version_info[0] == 2
 
 if PY2:
-    decode_text = unicode  # noqa: F821
+    decode_text = unicode
 else:
     decode_text = str
 
@@ -22,9 +24,8 @@ class InvalidValue(bytes):
             # Make sure the string starts with "b'" in
             # "InvalidValue(b'value here')".
             text = 'b' + text
-
+            
         return 'InvalidValue({})'.format(text)
-
 
 class FieldParser:
     def __init__(self, table, memofile=None):
@@ -89,16 +90,18 @@ class FieldParser:
 
     def parseD(self, field, data):
         """Parse date field and return datetime.date or None"""
+        data = data.strip().strip(b'*').strip(b'\x00')
         try:
             return datetime.date(int(data[:4]), int(data[4:6]), int(data[6:8]))
         except ValueError:
-            if data.strip(b' 0\0') == b'':
+            if data.strip(b' 0') == b'':
                 # A record containing only spaces and/or zeros is
                 # a NULL value.
                 return None
             else:
-                raise ValueError('invalid date {!r}'.format(data))
-
+                #raise ValueError('invalid date {!r}'.format(data))
+                return None
+    
     def parseF(self, field, data):
         """Parse float field and return float or None"""
         # In some files * is used for padding.
@@ -120,7 +123,7 @@ class FieldParser:
             return True
         elif data in b'FfNn':
             return False
-        elif data in b'? \0':
+        elif data in b'? ':
             return None
         else:
             # Todo: return something? (But that would be misleading!)
@@ -163,7 +166,7 @@ class FieldParser:
         Returns int, float or None if the field is empty.
         """
         # In some files * is used for padding.
-        data = data.strip().strip(b'*\0')
+        data = data.strip().strip(b'*').strip(b'\x00')
 
         try:
             return int(data)
@@ -172,7 +175,13 @@ class FieldParser:
                 return None
             else:
                 # Account for , in numeric fields
-                return float(data.replace(b',', b'.'))
+                try:
+                    return float(data.replace(b',', b'.'))
+                except Exception:
+                    try:
+                        return float( re.sub(b'[,.-/]',b'',data)   )
+                    except Exception:
+                        return 0
 
     def parseO(self, field, data):
         """Parse long field (O) and return float."""
@@ -204,15 +213,15 @@ class FieldParser:
             # (At least I hope so.)
             #
             day, msec = struct.unpack('<LL', data)
-            if day:
+            if day and day<3651934:
                 dt = datetime.datetime.fromordinal(day - offset)
-                delta = datetime.timedelta(seconds=msec / 1000)
+                delta = datetime.timedelta(seconds=msec/1000)
                 return dt + delta
             else:
                 return None
         else:
             return None
-
+            
     def parseY(self, field, data):
         """Parse currency field (Y) and return decimal.Decimal.
 
@@ -222,6 +231,7 @@ class FieldParser:
 
         # Currency fields are stored with 4 points of precision
         return Decimal(value) / 10000
+
 
     def parseB(self, field, data):
         """Binary memo field or double precision floating point number
@@ -246,6 +256,7 @@ class FieldParser:
 
         The raw data is returned as a binary string."""
         return self.get_memo(self._parse_memo_index(data))
+
 
     # Autoincrement field ('+')
     parse2B = parseI
